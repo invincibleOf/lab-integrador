@@ -16,8 +16,13 @@ data:
   CLOUD_REGION:                 "us-central1"
   GCP_PROJECT_ID:               "bold-bastion-505423-e7"
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-svc:4317"
-  DATABASE_URL:                 "postgresql://app:secret@postgres-svc:5432/appdb"
+  # Métricas HTTP con semconv estable: http.server.request.duration (segundos)
+  # con http.response.status_code — base de los SLIs y reglas AIOps.
+  OTEL_SEMCONV_STABILITY_OPT_IN: "http"
+  # DATABASE_URL ya no vive aquí: viene del Secret db-credentials (Cloud SQL),
+  # creado por scripts/deploy.sh a partir de los outputs de Terraform.
   SERVICE_B_URL:                "http://service-b-svc:8001"
+  DATA_SERVICE_URL:             "http://data-service-svc:8002"
   APP_VERSION:                  "1.0.0"
   # Variables de chaos — en producción siempre en 0
   # Chaos Mesh/LitmusChaos las reemplazan con faults de red reales
@@ -126,7 +131,8 @@ data:
           address: 0.0.0.0:8888
 
 ---
-# ConfigMap del SQL de inicialización
+# ConfigMap del SQL de inicialización — lo ejecuta el Job db-init
+# (03-db-init-job.yaml) contra Cloud SQL. Es idempotente.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -149,11 +155,10 @@ data:
       last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
     CREATE TABLE IF NOT EXISTS products (
-      id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      sku VARCHAR(100) PRIMARY KEY,
       name VARCHAR(100) NOT NULL,
       category VARCHAR(50) NOT NULL,
-      price NUMERIC(10,2) NOT NULL,
-      stock INTEGER NOT NULL DEFAULT 0
+      price NUMERIC(10,2) NOT NULL
     );
     INSERT INTO orders (id, product, quantity, status, customer_id) VALUES
       ('ord-001','LAPTOP-X1',1,'delivered','cust-100'),
@@ -165,8 +170,8 @@ data:
       ('MOUSE-PRO',50,'WH-MAIN'),
       ('KEYBOARD-MK',30,'WH-MAIN')
     ON CONFLICT (product_id) DO NOTHING;
-    INSERT INTO products (name, category, price, stock) VALUES
-      ('Laptop X1','Electronics',1299.99,15),
-      ('Mouse Pro','Peripherals',49.99,50),
-      ('Keyboard MK','Peripherals',89.99,30)
-    ON CONFLICT DO NOTHING;
+    INSERT INTO products (sku, name, category, price) VALUES
+      ('LAPTOP-X1','Laptop X1','Electronics',1299.99),
+      ('MOUSE-PRO','Mouse Pro','Peripherals',49.99),
+      ('KEYBOARD-MK','Keyboard MK','Peripherals',89.99)
+    ON CONFLICT (sku) DO NOTHING;

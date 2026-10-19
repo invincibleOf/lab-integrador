@@ -1,5 +1,7 @@
 project_id   = "bold-bastion-505423-e7"
 region       = "us-central1"
+zone         = "us-central1-a"
 cluster_name = "otel-lab"
-node_count   = 1
+node_count   = 2
 machine_type = "e2-standard-4"
+db_tier      = "db-f1-micro"

@@ -1,16 +1,20 @@
 """
 service-b: FastAPI — Servicio de inventario
-Recibe llamadas de service-a, consulta inventario en PostgreSQL.
-Continúa el trace distribuido iniciado por service-a mediante W3C TraceContext.
+Recibe llamadas de service-a, consulta inventario en Cloud SQL y enriquece la
+respuesta con el detalle del producto desde data-service.
+Continúa el trace distribuido iniciado por service-a mediante W3C TraceContext
+y lo propaga a data-service (service-a → service-b → data-service).
 """
 
 import logging
 import os
 import time
 import random
+import httpx
 import psycopg2
 
 from fastapi import FastAPI, HTTPException
+from starlette.concurrency import run_in_threadpool
 from pythonjsonlogger import jsonlogger
 from contextlib import asynccontextmanager
 
@@ -25,11 +29,13 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
 
 # ── Config ────────────────────────────────────────────────────────────────────
 OTEL_ENDPOINT   = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector:4317")
 DB_DSN          = os.getenv("DATABASE_URL", "postgresql://app:secret@postgres:5432/appdb")
+DATA_SERVICE_URL = os.getenv("DATA_SERVICE_URL", "http://data-service-svc:8002")
 PROMETHEUS_PORT = int(os.getenv("PROMETHEUS_PORT", "9091"))
 ENV             = os.getenv("ENVIRONMENT", "production")
 APP_VERSION     = os.getenv("APP_VERSION", "1.0.0")
@@ -101,6 +107,9 @@ logger = logging.getLogger("service-b")
 # y continúa el trace iniciado por service-a — sin ninguna línea extra de código.
 FastAPIInstrumentor().instrument(tracer_provider=tracer_provider)
 Psycopg2Instrumentor().instrument(tracer_provider=tracer_provider)
+# HTTPXClientInstrumentor: crea el span CLIENT hacia data-service e inyecta el
+# header traceparent, así data-service continúa el mismo trace_id.
+HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
 
 # ── Cache en memoria (simulación) ─────────────────────────────────────────────
 _inventory_cache: dict[str, dict] = {}
@@ -130,36 +139,34 @@ async def health():
     return {"status": "ok", "service": "service-b"}
 
 
-@app.get("/inventory/{product_id}")
-async def get_inventory(product_id: str):
+async def fetch_product(product_id: str) -> dict:
     """
-    Retorna disponibilidad de inventario para un producto.
-    El trace_id es el MISMO que el de service-a — propagado vía W3C TraceContext.
-    El flame graph en Jaeger mostrará este span como hijo del span de service-a.
+    Llama a data-service. Si falla, service-b responde 502: el error se
+    propaga hasta service-a y el SLI del borde lo refleja (es lo que permite
+    medir el consumo de error budget en el experimento 2 de caos).
     """
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{DATA_SERVICE_URL}/data/products/{product_id}")
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error("data-service respondió error",
+                     extra={"product_id": product_id, "status": e.response.status_code})
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+        raise HTTPException(status_code=502, detail="data-service error")
+    except httpx.HTTPError as e:
+        logger.error("data-service no disponible", extra={"product_id": product_id, "error": str(e)})
+        raise HTTPException(status_code=502, detail="data-service unavailable")
+
+
+def fetch_inventory_from_db(product_id: str) -> dict:
+    """Consulta bloqueante (psycopg2) — se ejecuta en el threadpool."""
     start = time.time()
-    inventory_requests.add(1, {"product": product_id})
-
-    # ── Verificar cache en memoria ────────────────────────────────────────────
-    if product_id in _inventory_cache:
-        with tracer.start_as_current_span(
-            "inventory.cache.hit",
-            attributes={"cache.type": "in-memory", "product.id": product_id}
-        ):
-            cache_hits.add(1, {"product": product_id})
-            logger.info("Cache hit", extra={"product_id": product_id})
-            return _inventory_cache[product_id]
-
-    # ── Custom span: consulta DB de inventario ────────────────────────────────
     with tracer.start_as_current_span(
         "inventory.db.fetch",
-        kind=trace.SpanKind.CLIENT,
-        attributes={
-            "db.system":    "postgresql",
-            "db.operation": "SELECT",
-            "db.name":      "appdb",
-            "product.id":   product_id,
-        }
+        attributes={"product.id": product_id},
     ) as span:
         try:
             conn = get_db_connection()
@@ -175,45 +182,62 @@ async def get_inventory(product_id: str):
             )
             row = cur.fetchone()
             conn.close()
-
-            duration = time.time() - start
-            inventory_query_duration.record(duration, {"operation": "SELECT"})
-
-            if not row:
-                span.set_status(trace.StatusCode.ERROR, "Product not found")
-                raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
-
-            result = {
-                "product_id":   row[0],
-                "available":    row[1],
-                "warehouse":    row[2],
-                "last_updated": str(row[3]),
-            }
-
-            span.set_attribute("inventory.available", result["available"])
-            span.set_attribute("inventory.warehouse", result["warehouse"])
-            span.set_status(trace.StatusCode.OK)
-
-            # Actualizar cache
-            _inventory_cache[product_id] = result
-
-            logger.info(
-                "Inventory fetched from DB",
-                extra={
-                    "product_id": product_id,
-                    "available":  result["available"],
-                    "duration_s": round(duration, 4),
-                }
-            )
-            return result
-
-        except HTTPException:
-            raise
         except Exception as e:
             span.record_exception(e)
             span.set_status(trace.StatusCode.ERROR, str(e))
             logger.error("Inventory DB query failed", extra={"error": str(e), "product_id": product_id})
             raise HTTPException(status_code=500, detail="Inventory service error")
+
+        duration = time.time() - start
+        inventory_query_duration.record(duration, {"operation": "SELECT"})
+
+        if not row:
+            span.set_status(trace.StatusCode.ERROR, "Product not found")
+            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+
+        result = {
+            "product_id":   row[0],
+            "available":    row[1],
+            "warehouse":    row[2],
+            "last_updated": str(row[3]),
+        }
+        span.set_attribute("inventory.available", result["available"])
+        span.set_attribute("inventory.warehouse", result["warehouse"])
+
+        logger.info(
+            "Inventory fetched from DB",
+            extra={"product_id": product_id, "available": result["available"],
+                   "duration_s": round(duration, 4)},
+        )
+        return result
+
+
+@app.get("/inventory/{product_id}")
+async def get_inventory(product_id: str):
+    """
+    Retorna disponibilidad de inventario + detalle del producto.
+    El trace_id es el MISMO que el de service-a — propagado vía W3C TraceContext
+    — y continúa hacia data-service.
+    """
+    inventory_requests.add(1, {"product": product_id})
+
+    # Detalle del producto en cada request (también con cache hit), así toda
+    # traza tiene los 3 saltos y el caos en data-service afecta a todo el tráfico.
+    product = await fetch_product(product_id)
+
+    if product_id in _inventory_cache:
+        with tracer.start_as_current_span(
+            "inventory.cache.hit",
+            attributes={"cache.type": "in-memory", "product.id": product_id}
+        ):
+            cache_hits.add(1, {"product": product_id})
+            logger.info("Cache hit", extra={"product_id": product_id})
+            inventory = _inventory_cache[product_id]
+    else:
+        inventory = await run_in_threadpool(fetch_inventory_from_db, product_id)
+        _inventory_cache[product_id] = inventory
+
+    return {**inventory, "product": product}
 
 
 @app.post("/inventory/{product_id}/reserve")

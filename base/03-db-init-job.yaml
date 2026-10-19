@@ -1,0 +1,39 @@
+# ════════════════════════════════════════════════════════════════
+# 03-db-init-job.yaml
+# Inicializa el esquema en Cloud SQL (IP privada) con el SQL del
+# ConfigMap postgres-init. Idempotente: CREATE IF NOT EXISTS +
+# ON CONFLICT DO NOTHING, se puede re-ejecutar sin efectos.
+#
+# Por qué un Job y no un initContainer: el esquema se crea una vez
+# por base de datos, no una vez por pod; un initContainer lo correría
+# en cada réplica y en cada reinicio.
+# ════════════════════════════════════════════════════════════════
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: otel-lab
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: db-init
+        chaos.exclude: "true"
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:16-alpine
+          command: ["sh", "-c", "psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f /sql/init.sql"]
+          envFrom:
+            - secretRef:
+                name: db-credentials
+          volumeMounts:
+            - name: init-sql
+              mountPath: /sql
+      volumes:
+        - name: init-sql
+          configMap:
+            name: postgres-init

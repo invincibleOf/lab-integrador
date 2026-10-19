@@ -163,7 +163,8 @@ async def get_order(order_id: str, request: Request):
     start = time.time()
     labels = {"endpoint": "/order", "method": "GET"}
     active_requests.add(1, labels)
-    http_requests_total.add(1, labels)
+    # Un solo conteo por request, en el finally, con el status final real.
+    status_code = 200
 
     try:
         # ── Custom span: lógica de negocio DB ────────────────────────────────
@@ -241,19 +242,20 @@ async def get_order(order_id: str, request: Request):
                 sb_span.set_attribute("inventory.available", inventory.get("available", 0))
                 logger.info("Inventory fetched from service-b",
                             extra={"product": order_data["product"], "available": inventory.get("available")})
-                status_labels = {**labels, "status": "2xx"} 
-            except httpx.HTTPStatusError as e:
+            except httpx.HTTPError as e:
+                # Antes se respondía 200 con inventario "-1" (degradación
+                # silenciosa): el SLI del borde nunca veía el fallo. Ahora el
+                # error se propaga como 502 para que el SLO lo refleje.
                 service_b_calls_total.add(1, {"status": "error"})
                 sb_span.record_exception(e)
                 sb_span.set_status(trace.StatusCode.ERROR, str(e))
-                status_labels = {**labels, "status": f"{e.status_code // 100}xx"}
-                http_requests_total.add(1, status_labels)
                 logger.error("service-b call failed", extra={"error": str(e)})
-                inventory = {"available": -1, "error": "service-b unavailable"}
+                upstream = getattr(getattr(e, "response", None), "status_code", None)
+                if upstream == 404:
+                    raise HTTPException(status_code=404, detail="Product not found")
+                raise HTTPException(status_code=502, detail="service-b unavailable")
 
-        total_duration = time.time() - start
-        http_requests_total.add(1, status_labels)
-        http_request_duration.record(total_duration, labels)
+        http_request_duration.record(time.time() - start, labels)
 
         return {
             "order":     order_data,
@@ -261,8 +263,15 @@ async def get_order(order_id: str, request: Request):
             "trace_id":  format(trace.get_current_span().get_span_context().trace_id, "032x"),
         }
 
+    except HTTPException as e:
+        status_code = e.status_code
+        raise
+    except Exception:
+        status_code = 500
+        raise
     finally:
         active_requests.add(-1, labels)
+        http_requests_total.add(1, {**labels, "status": f"{status_code // 100}xx"})
 
 
 @app.get("/metrics/health")

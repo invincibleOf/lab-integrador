@@ -9,4 +9,3 @@ opentelemetry-sdk>=1.25.0,<2.0.0
 opentelemetry-exporter-otlp-proto-grpc>=1.25.0,<2.0.0
 opentelemetry-instrumentation>=0.46b0
 opentelemetry-instrumentation-fastapi>=0.46b0
-opentelemetry-instrumentation-psycopg2>=0.46b0

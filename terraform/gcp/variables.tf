@@ -5,9 +5,15 @@ variable "project_id" {
 }
 
 variable "region" {
-  description = "Región de GCP para el clúster GKE"
+  description = "Región de GCP (Cloud SQL, Artifact Registry, subred)"
   type        = string
   default     = "us-central1"
+}
+
+variable "zone" {
+  description = "Zona del clúster GKE zonal"
+  type        = string
+  default     = "us-central1-a"
 }
 
 variable "cluster_name" {
@@ -17,13 +23,19 @@ variable "cluster_name" {
 }
 
 variable "node_count" {
-  description = "Número inicial de nodos por zona en el Node Pool"
+  description = "Número inicial de nodos en el Node Pool"
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "machine_type" {
   description = "Tipo de máquina para los nodos de GKE"
   type        = string
   default     = "e2-standard-4"
+}
+
+variable "db_tier" {
+  description = "Tier de la instancia Cloud SQL"
+  type        = string
+  default     = "db-f1-micro"
 }
