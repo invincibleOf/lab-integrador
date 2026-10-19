@@ -386,14 +386,14 @@ spec:
             - name: SPAN_STORAGE_TYPE
               value: memory
             - name: MEMORY_MAX_TRACES
-              value: "100000"
+              value: "10000"   # 100000 provocaba OOMKilled con 512Mi
           resources:
             requests:
               cpu: 100m
               memory: 256Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi
 
 ---
 apiVersion: v1
