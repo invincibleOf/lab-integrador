@@ -118,7 +118,6 @@ logger = logging.getLogger("service-a")
 # FastAPIInstrumentor crea spans automáticos para cada endpoint HTTP
 # HTTPXClientInstrumentor propaga el W3C TraceContext hacia service-b
 # Psycopg2Instrumentor crea spans para cada query SQL
-FastAPIInstrumentor().instrument(tracer_provider=tracer_provider)
 HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
 Psycopg2Instrumentor().instrument(tracer_provider=tracer_provider)
 
@@ -143,6 +142,13 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# instrument_app(app) y no FastAPIInstrumentor().instrument(): el modo global
+# parchea fastapi.FastAPI, pero `from fastapi import FastAPI` ya capturó la clase
+# original → la app quedaba sin span servidor, el traceparent entrante no se
+# extraía y cada servicio iniciaba una traza nueva (trazas fragmentadas).
+# excluded_urls: los probes de /health no generan spans (ruido).
+FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, excluded_urls="health")
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 

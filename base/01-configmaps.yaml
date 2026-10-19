@@ -75,7 +75,10 @@ data:
             key: cloud.project
             value: ${env:GCP_PROJECT_ID}
       resourcedetection:
-        detectors: [env, gcp, k8s_node]
+        # gcp ya aporta k8s.cluster.name, cloud.availability_zone y host.id en GKE.
+        # (k8s_node no es un detector válido; el correcto, k8snode, exige además
+        # la env K8S_NODE_NAME — no aporta nada que gcp no dé.)
+        detectors: [env, gcp]
         timeout: 10s
         override: false
       filter/health:

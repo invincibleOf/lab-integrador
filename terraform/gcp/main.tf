@@ -17,6 +17,25 @@ provider "google" {
   region  = var.region
 }
 
+# ── APIs del proyecto ───────────────────────────────────────────────────────
+# disable_on_destroy = false: un `terraform destroy` del lab no debe apagar
+# APIs del proyecto que otros recursos o personas puedan estar usando.
+resource "google_project_service" "apis" {
+  for_each = toset([
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "sqladmin.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "artifactregistry.googleapis.com",
+    "containerscanning.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "monitoring.googleapis.com",
+    "logging.googleapis.com",
+  ])
+  service            = each.value
+  disable_on_destroy = false
+}
+
 # ── Red VPC dedicada ────────────────────────────────────────────────────────
 resource "google_compute_network" "otel_vpc" {
   name                    = "otel-lab-vpc"

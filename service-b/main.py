@@ -105,7 +105,6 @@ logger = logging.getLogger("service-b")
 # ── Auto-instrumentación ──────────────────────────────────────────────────────
 # FastAPIInstrumentor: extrae automáticamente el header traceparent
 # y continúa el trace iniciado por service-a — sin ninguna línea extra de código.
-FastAPIInstrumentor().instrument(tracer_provider=tracer_provider)
 Psycopg2Instrumentor().instrument(tracer_provider=tracer_provider)
 # HTTPXClientInstrumentor: crea el span CLIENT hacia data-service e inyecta el
 # header traceparent, así data-service continúa el mismo trace_id.
@@ -132,6 +131,13 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# instrument_app(app) y no FastAPIInstrumentor().instrument(): el modo global
+# parchea fastapi.FastAPI, pero `from fastapi import FastAPI` ya capturó la clase
+# original → la app quedaba sin span servidor, el traceparent entrante no se
+# extraía y cada servicio iniciaba una traza nueva (trazas fragmentadas).
+# excluded_urls: los probes de /health no generan spans (ruido).
+FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, excluded_urls="health")
 
 
 @app.get("/health")

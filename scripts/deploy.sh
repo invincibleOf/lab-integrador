@@ -30,13 +30,13 @@ tf_out() { terraform -chdir="$TF_DIR" output -raw "$1"; }
 
 images() {
   local repo; repo="$(tf_out image_repo)"
-  gcloud auth configure-docker "${repo%%/*}" --quiet
   for svc in service-a service-b data-service; do
-    log "Build $svc → $repo/$svc:$VERSION"
-    # --platform linux/amd64: el Mac es arm64 y los nodos e2 de GKE son amd64.
-    # Sin esto los pods fallan con "exec format error".
-    docker buildx build --platform linux/amd64 \
-      -t "$repo/$svc:$VERSION" --push "$ROOT/$svc"
+    log "Cloud Build $svc → $repo/$svc:$VERSION"
+    # Cloud Build en lugar de docker build local: solo se sube el código
+    # fuente (KB), la imagen se construye en amd64 nativo (los nodos de GKE)
+    # sin emulación QEMU desde el Mac arm64, y el push a Artifact Registry
+    # ocurre dentro de la red de Google.
+    gcloud builds submit "$ROOT/$svc" --tag "$repo/$svc:$VERSION" --quiet
   done
   ok "Imágenes publicadas"
 }
@@ -68,7 +68,7 @@ app() {
   ok "Esquema listo"
 
   kubectl apply -f "$ROOT/base/02-deployments.yaml"
-  # Reinicia para tomar imágenes nuevas con el mismo tag (imagePullPolicy por defecto)
+  # Reinicia para tomar imágenes nuevas con el mismo tag (requiere imagePullPolicy: Always)
   kubectl rollout restart deployment/service-a deployment/service-b deployment/data-service -n "$NAMESPACE"
   for d in service-a service-b data-service; do
     kubectl rollout status deployment/"$d" -n "$NAMESPACE" --timeout=300s

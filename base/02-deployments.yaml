@@ -148,6 +148,9 @@ spec:
       containers:
         - name: service-a
           image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/service-a:1.0.0
+          # Always: el tag 1.0.0 se reutiliza en cada build; con IfNotPresent (default
+          # para tags != latest) el nodo seguiría usando la imagen vieja en cache.
+          imagePullPolicy: Always
           ports:
             - containerPort: 8000
               name: http
@@ -227,6 +230,9 @@ spec:
       containers:
         - name: service-b
           image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/service-b:1.0.0
+          # Always: el tag 1.0.0 se reutiliza en cada build; con IfNotPresent (default
+          # para tags != latest) el nodo seguiría usando la imagen vieja en cache.
+          imagePullPolicy: Always
           ports:
             - containerPort: 8001
               name: http
@@ -301,6 +307,9 @@ spec:
       containers:
         - name: data-service
           image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/data-service:1.0.0
+          # Always: el tag 1.0.0 se reutiliza en cada build; con IfNotPresent (default
+          # para tags != latest) el nodo seguiría usando la imagen vieja en cache.
+          imagePullPolicy: Always
           ports:
             - containerPort: 8002
               name: http

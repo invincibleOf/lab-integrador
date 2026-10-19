@@ -2,10 +2,8 @@ FROM python:3.12.7-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --upgrade pip setuptools wheel
+# Sin apt-get: psycopg2-binary ya trae libpq compilada; gcc + libpq-dev
+# solo agregaban ~110 MB a la imagen sin usarse.
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

@@ -108,7 +108,6 @@ logger = logging.getLogger("data-service")
 # Solo FastAPI. Psycopg2Instrumentor NO se usa aquí: emite los atributos
 # legacy (db.statement, db.name) y duplicaría el span CLIENT manual, que
 # sí sigue la semconv estable.
-FastAPIInstrumentor().instrument(tracer_provider=tracer_provider)
 
 
 def current_trace_id() -> str:
@@ -183,6 +182,13 @@ app = FastAPI(
     version=APP_VERSION,
     lifespan=lifespan,
 )
+
+# instrument_app(app) y no FastAPIInstrumentor().instrument(): el modo global
+# parchea fastapi.FastAPI, pero `from fastapi import FastAPI` ya capturó la clase
+# original → la app quedaba sin span servidor, el traceparent entrante no se
+# extraía y cada servicio iniciaba una traza nueva (trazas fragmentadas).
+# excluded_urls: los probes de /health no generan spans (ruido).
+FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, excluded_urls="health")
 
 # Los endpoints son `def` (no `async def`) a propósito: psycopg2 y time.sleep
 # son bloqueantes. Se usa closing() porque `with psycopg2.connect()` solo
