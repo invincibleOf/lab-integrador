@@ -8,6 +8,15 @@ MTTD medido**.
 
 📄 Reporte ejecutivo: [`docs/Reporte_Lab_Integrador.pdf`](docs/Reporte_Lab_Integrador.pdf)
 
+**Universidad de La Sabana — Maestría en Arquitectura de Software**
+Observabilidad en Ambientes Productivos · Docente: Mg. María Fernanda Ochoa Paipilla
+
+| Integrante | Código |
+|---|---|
+| Carlos Alberto Zambrano Braydi | 0000395349 |
+| Henry Julián Salazar Salcedo | 0000396117 |
+| Wolfran Alirio Pinzón Murillo | 0000393439 |
+
 ## Estructura
 
 | Ruta | Contenido |
