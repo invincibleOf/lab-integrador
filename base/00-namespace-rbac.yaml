@@ -1,0 +1,117 @@
+# ════════════════════════════════════════════════════════════════
+# 00-namespace-rbac.yaml
+# Namespace, ServiceAccounts y RBAC para el laboratorio OTel
+# con Chaos Engineering en GKE
+#
+# Aplicar primero:
+#   kubectl apply -f k8s/base/00-namespace-rbac.yaml
+# ════════════════════════════════════════════════════════════════
+
+---
+# Namespace principal
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: otel-lab
+  labels:
+    app.kubernetes.io/part-of: otel-lab
+    # LitmusChaos necesita este label para seleccionar el namespace
+    litmuschaos.io/subject: "otel-lab"
+
+---
+# Namespace para Chaos Mesh
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos-mesh
+
+---
+# Namespace para LitmusChaos
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: litmus
+
+---
+# ServiceAccount para el OTel Collector
+# Necesita permisos para leer pods y nodos (resourcedetection)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector-sa
+  namespace: otel-lab
+
+---
+# ClusterRole para el OTel Collector
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "namespaces", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding para el OTel Collector
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-role
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector-sa
+    namespace: otel-lab
+
+---
+# ServiceAccount para LitmusChaos experiments en el namespace otel-lab
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: litmus-admin
+  namespace: otel-lab
+
+---
+# ClusterRole para que LitmusChaos pueda inyectar chaos
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: litmus-admin-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log", "pods/eviction",
+                "services", "endpoints", "configmaps", "secrets"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["*"]
+  - apiGroups: ["litmuschaos.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["chaos-mesh.org"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: litmus-admin-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: litmus-admin-role
+subjects:
+  - kind: ServiceAccount
+    name: litmus-admin
+    namespace: otel-lab

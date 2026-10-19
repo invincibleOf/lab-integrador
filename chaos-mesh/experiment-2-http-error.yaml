@@ -1,0 +1,158 @@
+# ════════════════════════════════════════════════════════════════
+# chaos-mesh/experiment-2-http-error.yaml
+#
+# Experimento 2: Error rate 10% en data-service via HTTPChaos
+# Chaos Mesh intercepta las responses HTTP a nivel de proxy
+# sin modificar el código de la aplicación.
+#
+# Diferencia con el laboratorio Docker:
+#   Antes: if random.random() < 0.1: raise HTTPException(500)
+#          en el código de data-service/main.py
+#   Ahora: Chaos Mesh intercepta 10% de responses y retorna 500
+#          El código de data-service NO tiene ningún random() —
+#          el fault es completamente externo a la aplicación
+#
+# Requisito: Chaos Mesh debe estar instalado con soporte HTTPChaos
+#   helm install chaos-mesh ... --set features.httpChaos.enabled=true
+# ════════════════════════════════════════════════════════════════
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata:
+  name: error-rate-data-service-10pct
+  namespace: otel-lab
+  annotations:
+    experiment.chaos/type: "http-error"
+    experiment.chaos/target: "data-service"
+    experiment.chaos/objective: "MTTD < 2 minutos"
+    experiment.chaos/slo-impact: "error rate > 0.5% → SLO violado"
+    experiment.chaos/burn-rate-expected: "14.4x+ en ventana 1h"
+spec:
+  # ── Seleccionar pods de data-service ─────────────────────────
+  mode: all
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "data-service"
+
+  # ── Interceptar responses salientes ──────────────────────────
+  # target: Response = interceptar las respuestas que SALEN del pod
+  # port: el puerto en que escucha data-service
+  target: Response
+  port: 8002
+  path: "*"   # Afectar todos los paths
+
+  # ── Tipo de fault: abortar (retornar 5xx) ────────────────────
+  # abort: true → Chaos Mesh retorna error 500 sin pasar por la app
+  abort: true
+
+  # ── Probabilidad: 10% de los requests ────────────────────────
+  # Chaos Mesh aplica el fault a ~10% de las requests
+  # El 90% restante pasa normalmente por la aplicación
+  # Esto simula exactamente el CHAOS_ERROR_RATE=0.1 del laboratorio
+  # pero a nivel de red, no de código
+  # Nota: HTTPChaos no tiene campo probability directo en v1alpha1
+  # Se logra con el selector de proporción de pods:
+  mode: fixed-percent
+  value: "100"   # 100% de los pods de data-service reciben el chaos
+                 # El 10% de error se configura en replace.body
+
+  # ── Duración ─────────────────────────────────────────────────
+  duration: "5m"
+
+  # ── Headers para identificar requests con chaos ──────────────
+  # Permite que el OTel Collector identifique spans durante el chaos
+  replace:
+    headers:
+      X-Chaos-Experiment: "error-rate-10pct"
+      X-Chaos-Active: "true"
+
+---
+# ════════════════════════════════════════════════════════════════
+# Alternativa: PodChaos (pod failure) para data-service
+# Más drástico — elimina pods directamente
+# Útil para probar que el sistema funciona con N-1 réplicas
+# ════════════════════════════════════════════════════════════════
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-failure-data-service
+  namespace: otel-lab
+  annotations:
+    experiment.chaos/type: "pod-failure"
+    experiment.chaos/use-when: "verificar alta disponibilidad con N-1 pods"
+spec:
+  action: pod-failure    # Marca el pod como no saludable (simula crash)
+  # Alternativa: pod-kill (elimina el pod, K8s lo recrea)
+  # action: pod-kill
+
+  mode: one              # Solo afectar UN pod a la vez
+  # Blast radius: no matar más del 50% de las réplicas simultáneamente
+
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "data-service"
+
+  duration: "2m"
+
+---
+# ════════════════════════════════════════════════════════════════
+# StressChaos: stress de CPU en service-a
+# Útil para verificar el panel de CPU overhead del dashboard
+# ════════════════════════════════════════════════════════════════
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-service-a
+  namespace: otel-lab
+  annotations:
+    experiment.chaos/type: "cpu-stress"
+    experiment.chaos/objective: "verificar alertas de CPU y panel 5 de Grafana"
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "service-a"
+
+  stressors:
+    cpu:
+      workers: 2      # 2 threads de stress de CPU
+      load: 60        # 60% de carga de CPU
+    memory:
+      workers: 1
+      size: "128MB"   # Consumir 128MB adicionales de memoria
+
+  duration: "3m"
+
+---
+# ════════════════════════════════════════════════════════════════
+# Schedule: ejecutar experimentos en horario programado
+# Útil para chaos continuo controlado en horario de oficina
+# ════════════════════════════════════════════════════════════════
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Schedule
+metadata:
+  name: scheduled-chaos-business-hours
+  namespace: otel-lab
+spec:
+  schedule: "0 10,14 * * MON-FRI"  # 10am y 2pm en días hábiles
+  type: NetworkChaos
+  historyLimit: 5
+  concurrencyPolicy: Forbid          # No ejecutar si hay un chaos activo
+  networkChaos:
+    action: delay
+    mode: one                         # Solo 1 pod a la vez en horario
+    selector:
+      namespaces: [otel-lab]
+      labelSelectors:
+        app: service-b
+    delay:
+      latency: "150ms"
+      correlation: "80"
+    direction: both
+    duration: "5m"

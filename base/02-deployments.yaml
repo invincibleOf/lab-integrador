@@ -1,0 +1,546 @@
+# ════════════════════════════════════════════════════════════════
+# 02-deployments.yaml
+# Todos los Deployments del laboratorio OTel en GKE
+#
+# Labels críticos para Chaos Mesh y LitmusChaos:
+#   app: <nombre>      ← selector para chaos experiments
+#   version: "1.0.0"   ← para canary y traffic splitting
+# ════════════════════════════════════════════════════════════════
+
+---
+# ── PostgreSQL ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: otel-lab
+spec:
+  serviceName: postgres-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        # Label explícito para excluir de chaos experiments
+        chaos.exclude: "true"
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: app
+            - name: POSTGRES_PASSWORD
+              value: secret
+            - name: POSTGRES_DB
+              value: appdb
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "app", "-d", "appdb"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: init-sql
+          configMap:
+            name: postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+# ── OTel Collector — DaemonSet (Agent) ───────────────────────────
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-collector
+  namespace: otel-lab
+  labels:
+    app: otel-collector
+    component: observability
+spec:
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+        chaos.exclude: "true"   # No inyectar chaos al Collector
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+    spec:
+      serviceAccountName: otel-collector-sa
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.103.0
+          args: ["--config=/conf/collector-config.yaml"]
+          ports:
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 8888
+              name: metrics-inter
+            - containerPort: 8889
+              name: metrics-prom
+            - containerPort: 13133
+              name: health
+            - containerPort: 55679
+              name: zpages
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: otel-lab-config
+                  key: ENVIRONMENT
+            - name: CLOUD_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: otel-lab-config
+                  key: CLOUD_REGION
+            - name: GCP_PROJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: otel-lab-config
+                  key: GCP_PROJECT_ID
+            - name: CHAOS_EXPERIMENT_ACTIVE
+              value: "false"
+          volumeMounts:
+            - name: collector-config
+              mountPath: /conf
+          resources:
+            requests:
+              cpu: 100m
+              memory: 200Mi
+            limits:
+              cpu: 500m
+              memory: 600Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: collector-config
+          configMap:
+            name: collector-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector-svc
+  namespace: otel-lab
+  labels:
+    app: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: metrics
+      port: 8889
+      targetPort: 8889
+    - name: metrics-internal
+      port: 8888
+      targetPort: 8888
+  type: ClusterIP
+
+---
+# ── service-a ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-a
+  namespace: otel-lab
+  labels:
+    app: service-a
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: service-a
+  template:
+    metadata:
+      labels:
+        app: service-a
+        version: "1.0.0"
+        # Label para Chaos Mesh — target de experimentos
+        chaos.target: "true"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9064"
+    spec:
+      containers:
+        - name: service-a
+          image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/service-a:1.0.0
+          ports:
+            - containerPort: 8000
+              name: http
+            - containerPort: 9064
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: otel-lab-config
+          env:
+            - name: PROMETHEUS_PORT
+              value: "9064"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-a-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: service-a
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+    - name: metrics
+      port: 9064
+      targetPort: 9064
+  type: LoadBalancer
+
+---
+# ── service-b ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+  namespace: otel-lab
+  labels:
+    app: service-b
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: service-b
+  template:
+    metadata:
+      labels:
+        app: service-b
+        version: "1.0.0"
+        chaos.target: "true"   # Target de experimento de latencia
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9065"
+    spec:
+      containers:
+        - name: service-b
+          image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/service-b:1.0.0
+          ports:
+            - containerPort: 8001
+              name: http
+            - containerPort: 9065
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: otel-lab-config
+          env:
+            - name: PROMETHEUS_PORT
+              value: "9065"
+            - name: CHAOS_LATENCY_MS
+              value: "0"    # Chaos Mesh reemplaza esto con red real
+            - name: CHAOS_ERROR_RATE
+              value: "0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-b-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: service-b
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+  type: ClusterIP
+
+---
+# ── data-service ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-service
+  namespace: otel-lab
+  labels:
+    app: data-service
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: data-service
+  template:
+    metadata:
+      labels:
+        app: data-service
+        version: "1.0.0"
+        chaos.target: "true"   # Target de experimento de error rate
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9066"
+    spec:
+      containers:
+        - name: data-service
+          image: us-central1-docker.pkg.dev/bold-bastion-505423-e7/lab-integrador/data-service:1.0.0
+          ports:
+            - containerPort: 8002
+              name: http
+            - containerPort: 9066
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: otel-lab-config
+          env:
+            - name: PROMETHEUS_PORT
+              value: "9066"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 20
+            periodSeconds: 20
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-service-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: data-service
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+  type: ClusterIP
+
+---
+# ── Jaeger ────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: otel-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        chaos.exclude: "true"
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.58
+          ports:
+            - containerPort: 16686
+              name: ui
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 14268
+              name: http-legacy
+          env:
+            - name: COLLECTOR_OTLP_ENABLED
+              value: "true"
+            - name: SPAN_STORAGE_TYPE
+              value: memory
+            - name: MEMORY_MAX_TRACES
+              value: "100000"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: ui
+      port: 16686
+      targetPort: 16686
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+  type: LoadBalancer
+
+---
+# ── Prometheus ────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: otel-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        chaos.exclude: "true"
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.52.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yaml"
+            - "--storage.tsdb.retention.time=7d"
+            - "--web.enable-remote-write-receiver"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config
+              mountPath: /etc/prometheus
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+      volumes:
+        - name: prometheus-config
+          configMap:
+            name: prometheus-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-svc
+  namespace: otel-lab
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+  type: ClusterIP
+
+---
+# ── HPA para service-a (autoscaling) ─────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: service-a-hpa
+  namespace: otel-lab
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: service-a
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

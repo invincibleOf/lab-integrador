@@ -1,0 +1,162 @@
+# ════════════════════════════════════════════════════════════════
+# litmus/chaosengine-experiment-1.yaml
+#
+# LitmusChaos ChaosEngine — Experimento 1: Pod Network Latency
+#
+# LitmusChaos agrega lo que Chaos Mesh no tiene:
+#   ✅ Steady State Hypothesis formal (antes y después)
+#   ✅ ChaosResult CRD con veredicto Pass/Fail
+#   ✅ Timestamps de inicio/fin para calcular MTTD automáticamente
+#   ✅ Integración con ChaosCenter (dashboard visual)
+#
+# Pre-requisito: LitmusChaos operator instalado
+#   kubectl apply -f https://litmuschaos.github.io/litmus/litmus-operator-v3.x.x.yaml
+#
+# Instalar el ChaosExperiment de red:
+#   kubectl apply -f https://hub.litmuschaos.io/api/chaos/3.x.x?file=charts/generic/pod-network-latency/experiment.yaml -n otel-lab
+# ════════════════════════════════════════════════════════════════
+
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: otel-lab-network-latency
+  namespace: otel-lab
+  annotations:
+    experiment.litmus/author: "equipo-sre"
+    experiment.litmus/objective: "Validar detección de latencia en < 2 minutos"
+spec:
+  # ── Aplicación target ─────────────────────────────────────────
+  appinfo:
+    appns:    otel-lab
+    applabel: "app=service-b"
+    appkind:  deployment
+
+  # ── ServiceAccount con permisos de chaos ──────────────────────
+  chaosServiceAccount: litmus-admin
+
+  # ── Modo de ejecución ─────────────────────────────────────────
+  engineState: active       # active = ejecutar inmediatamente
+
+  # ── Monitoreo durante el chaos ────────────────────────────────
+  annotationCheck: "true"   # Verificar anotaciones de chaos en los pods
+
+  # ════════════════════════════════════════════════════════════════
+  # STEADY STATE HYPOTHESIS
+  # Condición que debe cumplirse ANTES Y DESPUÉS del experimento
+  # Si falla ANTES → no ejecutar el chaos (sistema ya está degradado)
+  # Si falla DESPUÉS → el sistema no se recuperó correctamente
+  # ════════════════════════════════════════════════════════════════
+  # Nota: LitmusChaos 3.x soporta Steady State via probes dentro del experimento
+
+  experiments:
+    - name: pod-network-latency
+      spec:
+        components:
+          env:
+            # ── Parámetros del fault ──────────────────────────
+            - name: NETWORK_LATENCY
+              value: "200"          # 200ms de latencia inyectada
+
+            - name: JITTER
+              value: "10"           # ±10ms de jitter
+
+            - name: TOTAL_CHAOS_DURATION
+              value: "300"          # 5 minutos de chaos (segundos)
+
+            - name: TARGET_CONTAINER
+              value: "service-b"    # Nombre del container en el pod
+
+            - name: DESTINATION_IPS
+              value: ""             # Vacío = afectar todo el tráfico de red
+
+            - name: DESTINATION_HOSTS
+              value: ""             # Vacío = afectar todos los hosts
+
+            - name: NETWORK_INTERFACE
+              value: "eth0"         # Interface de red del container
+
+            # ── Container runtime ─────────────────────────────
+            # GKE usa containerd por defecto desde K8s 1.24
+            - name: CONTAINER_RUNTIME
+              value: "containerd"
+
+            - name: SOCKET_PATH
+              value: "/run/containerd/containerd.sock"
+
+            # ── Steady State Probes ───────────────────────────
+            # LitmusChaos 3.x: probes verifican el steady state
+
+          # ── Probes: verificación automática del steady state ──
+          # HTTP Probe: verifica que service-b responde a /health
+          # antes, durante y después del chaos
+          statusCheckModes:
+            - Default
+
+        probe:
+          # Probe 1: HTTP check sobre service-b ANTES del chaos
+          - name: service-b-healthy-before
+            type: httpProbe
+            mode: SOT            # Start Of Test — verifica antes
+            httpProbe/inputs:
+              url: "http://service-b-svc:8001/health"
+              insecureSkipVerify: false
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              probeTimeout: 5s
+              interval: 2s
+              attempt: 3
+
+          # Probe 2: Prometheus check — alerta disparada durante chaos
+          # Verifica que AIOpsCorrelatedAnomaly se disparó (MTTD)
+          - name: alert-fired-during-chaos
+            type: promProbe
+            mode: DuringChaos    # Solo durante el chaos
+            promProbe/inputs:
+              endpoint: "http://prometheus-svc:9090"
+              query: |
+                ALERTS{alertname="AIOpsCorrelatedAnomaly",alertstate="firing"}
+              comparator:
+                criteria: ">="
+                value: "1"       # Al menos 1 alerta debe estar activa
+            runProperties:
+              probeTimeout: 30s
+              interval: 15s
+              attempt: 8        # Intentar durante 2 minutos (8 × 15s)
+              probePollingInterval: 5s
+
+          # Probe 3: HTTP check DESPUÉS del chaos (recuperación)
+          - name: service-b-recovered-after
+            type: httpProbe
+            mode: EOT            # End Of Test — verifica después
+            httpProbe/inputs:
+              url: "http://service-b-svc:8001/health"
+              insecureSkipVerify: false
+              method:
+                get:
+                  criteria: ==
+                  responseCode: "200"
+            runProperties:
+              probeTimeout: 10s
+              interval: 5s
+              attempt: 5
+
+          # Probe 4: Latencia volvió al baseline después del chaos
+          - name: latency-recovered-after
+            type: promProbe
+            mode: EOT
+            promProbe/inputs:
+              endpoint: "http://prometheus-svc:9090"
+              query: |
+                histogram_quantile(0.99,
+                  rate(otelcol_http_request_duration_seconds_bucket{job="service-b"}[2m])
+                )
+              comparator:
+                criteria: "<"
+                value: "0.3"     # p99 debe estar bajo 300ms post-chaos
+            runProperties:
+              probeTimeout: 30s
+              interval: 10s
+              attempt: 6

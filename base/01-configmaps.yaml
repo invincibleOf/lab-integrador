@@ -1,0 +1,172 @@
+# ════════════════════════════════════════════════════════════════
+# 01-configmaps.yaml
+# ConfigMaps con la configuración compartida del laboratorio
+# ════════════════════════════════════════════════════════════════
+
+---
+# ConfigMap de variables de entorno compartidas
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-lab-config
+  namespace: otel-lab
+data:
+  ENVIRONMENT:                  "production"
+  CLOUD_PROVIDER:               "gcp"
+  CLOUD_REGION:                 "us-central1"
+  GCP_PROJECT_ID:               "bold-bastion-505423-e7"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-svc:4317"
+  DATABASE_URL:                 "postgresql://app:secret@postgres-svc:5432/appdb"
+  SERVICE_B_URL:                "http://service-b-svc:8001"
+  APP_VERSION:                  "1.0.0"
+  # Variables de chaos — en producción siempre en 0
+  # Chaos Mesh/LitmusChaos las reemplazan con faults de red reales
+  CHAOS_LATENCY_MS:             "0"
+  CHAOS_ERROR_RATE:             "0"
+
+---
+# ConfigMap del OTel Collector — pipeline completo
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+  namespace: otel-lab
+data:
+  collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      zpages:
+        endpoint: 0.0.0.0:55679
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      hostmetrics:
+        collection_interval: 30s
+        scrapers:
+          cpu:
+          memory:
+          network:
+
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 400
+        spike_limit_mib: 100
+      resource:
+        attributes:
+          - action: insert
+            key: deployment.environment
+            value: ${env:ENVIRONMENT}
+          - action: insert
+            key: cloud.region
+            value: ${env:CLOUD_REGION}
+          - action: insert
+            key: cloud.project
+            value: ${env:GCP_PROJECT_ID}
+      resourcedetection:
+        detectors: [env, gcp, k8s_node]
+        timeout: 10s
+        override: false
+      filter/health:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.target"] == "/health"'
+      attributes/chaos:
+        # Agrega label para identificar spans durante experimentos de caos
+        actions:
+          - action: insert
+            key: chaos.experiment.active
+            value: ${env:CHAOS_EXPERIMENT_ACTIVE}
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+
+    exporters:
+      otlp/jaeger:
+        endpoint: jaeger-svc:4317
+        tls:
+          insecure: true
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: otelcol
+        resource_to_telemetry_conversion:
+          enabled: false
+      googlecloud:
+        project: ${env:GCP_PROJECT_ID}
+      logging:
+        verbosity: normal
+
+    service:
+      extensions: [health_check, zpages]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, resourcedetection,
+                       filter/health, attributes/chaos, batch]
+          exporters: [otlp/jaeger, logging]
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [memory_limiter, resource, resourcedetection, batch]
+          exporters: [prometheus, logging]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [logging]
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          address: 0.0.0.0:8888
+
+---
+# ConfigMap del SQL de inicialización
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: otel-lab
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS orders (
+      id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      product VARCHAR(100) NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      customer_id VARCHAR(50),
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS inventory (
+      product_id VARCHAR(100) PRIMARY KEY,
+      available INTEGER NOT NULL DEFAULT 0,
+      warehouse VARCHAR(50) NOT NULL DEFAULT 'WH-MAIN',
+      last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      name VARCHAR(100) NOT NULL,
+      category VARCHAR(50) NOT NULL,
+      price NUMERIC(10,2) NOT NULL,
+      stock INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO orders (id, product, quantity, status, customer_id) VALUES
+      ('ord-001','LAPTOP-X1',1,'delivered','cust-100'),
+      ('ord-002','MOUSE-PRO',2,'pending','cust-101'),
+      ('ord-003','KEYBOARD-MK',1,'shipped','cust-102')
+    ON CONFLICT (id) DO NOTHING;
+    INSERT INTO inventory (product_id, available, warehouse) VALUES
+      ('LAPTOP-X1',15,'WH-BOGOTA'),
+      ('MOUSE-PRO',50,'WH-MAIN'),
+      ('KEYBOARD-MK',30,'WH-MAIN')
+    ON CONFLICT (product_id) DO NOTHING;
+    INSERT INTO products (name, category, price, stock) VALUES
+      ('Laptop X1','Electronics',1299.99,15),
+      ('Mouse Pro','Peripherals',49.99,50),
+      ('Keyboard MK','Peripherals',89.99,30)
+    ON CONFLICT DO NOTHING;

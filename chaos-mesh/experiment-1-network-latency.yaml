@@ -1,0 +1,158 @@
+# ════════════════════════════════════════════════════════════════
+# chaos-mesh/experiment-1-network-latency.yaml
+#
+# Experimento 1: Inyección de latencia de red en service-b
+# Chaos Mesh usa tc qdisc en el kernel — latencia REAL de red,
+# no time.sleep() en el código de la app.
+#
+# Diferencia crítica con el laboratorio Docker:
+#   Antes: time.sleep(0.2) en main.py de service-b
+#   Ahora: tc qdisc add delay 200ms en el namespace de red del pod
+#          La app no sabe que hay chaos — lo mide OTel como latencia real
+#
+# Aplicar:
+#   kubectl apply -f chaos-mesh/experiment-1-network-latency.yaml
+# Eliminar (rollback automático):
+#   kubectl delete -f chaos-mesh/experiment-1-network-latency.yaml
+# ════════════════════════════════════════════════════════════════
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: latency-service-b-200ms
+  namespace: otel-lab
+  annotations:
+    # Documentación del experimento para el ChaosCenter de LitmusChaos
+    experiment.chaos/type: "network-latency"
+    experiment.chaos/target: "service-b"
+    experiment.chaos/objective: "MTTD < 2 minutos"
+    experiment.chaos/slo-impact: "p99 latencia > 500ms"
+    experiment.chaos/owner: "equipo-sre"
+spec:
+  # ── Tipo de fault: delay en la red ───────────────────────────
+  action: delay
+
+  # ── Blast radius: solo pods de service-b ─────────────────────
+  # Solo afecta los pods con label app=service-b en namespace otel-lab
+  # Los pods de service-a, data-service y el Collector NO son afectados
+  mode: all
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "service-b"
+      # Excluir pods marcados con chaos.exclude
+      # "chaos.exclude": "true"  ← Chaos Mesh no soporta exclusión por label directamente
+
+  # ── Parámetros del delay ──────────────────────────────────────
+  delay:
+    latency: "200ms"    # Latencia base inyectada
+    correlation: "100"  # 100% de los packets reciben el delay
+    jitter: "10ms"      # ±10ms de variación — más realista que exacto 200ms
+
+  # ── Dirección del tráfico afectado ───────────────────────────
+  direction: to   # Afecta tráfico entrante Y saliente de service-b
+                    # to: solo saliente, from: solo entrante
+
+  # ── Duración del experimento ──────────────────────────────────
+  # TTL automático — rollback sin intervención manual
+  duration: "5m"    # 5 minutos de chaos
+
+  # ── Scheduler: correr cada 30 minutos en horario de oficina ──
+  # Descomentar para chaos continuo programado:
+  # scheduler:
+  #   cron: "*/30 9-18 * * MON-FRI"
+
+---
+# ════════════════════════════════════════════════════════════════
+# Workflow de Chaos Mesh: ejecutar latency en serie con verificación
+# ════════════════════════════════════════════════════════════════
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata:
+  name: experiment-1-with-verification
+  namespace: otel-lab
+spec:
+  entry: entry-task
+  templates:
+    # ── Tarea de entrada: verificar steady state ──────────────
+    - name: entry-task
+      templateType: Serial
+      deadline: "15m"
+      children:
+        - verify-steady-state
+        - inject-latency
+        - wait-for-detection
+        - verify-recovery
+
+    # ── Verificar estado normal antes del chaos ───────────────
+    - name: verify-steady-state
+      templateType: Task
+      task:
+        container:
+          name: verify
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "=== VERIFICANDO STEADY STATE ==="
+              echo "Tiempo: $(date)"
+              # Verificar que service-b responde correctamente
+              for i in $(seq 1 5); do
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                  http://service-b-svc:8001/health)
+                echo "Health check $i: $STATUS"
+                if [ "$STATUS" != "200" ]; then
+                  echo "ERROR: service-b no está saludable"
+                  exit 1
+                fi
+              done
+              echo "Steady state verificado: service-b saludable"
+
+    # ── Inyectar la latencia ──────────────────────────────────
+    - name: inject-latency
+      templateType: NetworkChaos
+      networkChaos:
+        action: delay
+        mode: all
+        selector:
+          namespaces: [otel-lab]
+          labelSelectors:
+            app: service-b
+        delay:
+          latency: "200ms"
+          correlation: "100"
+          jitter: "10ms"
+        direction: to
+        #duration: "5m" NetworkChaos está embebido dentro de un Workflow, el Workflow es quien controla el 
+        #ciclo de vida de todos sus pasos. El Workflow tiene su propio mecanismo de tiempo llamado deadline 
+        #a nivel de template hay dos controladores intentando terminar el mismo objeto en momentos distintos
+
+    # ── Esperar que se detecte la anomalía ─────────────────────
+    - name: wait-for-detection
+      templateType: Suspend
+      deadline: "5m"   # Si no se detecta en 5 min → MTTD objetivo fallido
+
+    # ── Verificar recuperación post-chaos ─────────────────────
+    - name: verify-recovery
+      templateType: Task
+      task:
+        container:
+          name: verify-recovery
+          image: curlimages/curl:latest
+          command:
+            - sh
+            - -c
+            - |
+              echo "=== VERIFICANDO RECUPERACIÓN ==="
+              sleep 30  # Dar tiempo para que Chaos Mesh revierte
+              echo "Tiempo post-chaos: $(date)"
+              LATENCY=$(curl -s -o /dev/null -w "%{time_total}" \
+                http://service-b-svc:8001/inventory/LAPTOP-X1)
+              echo "Latencia medida: ${LATENCY}s"
+              if (( $(echo "$LATENCY > 0.3" | bc -l) )); then
+                echo "ADVERTENCIA: Latencia aún elevada post-chaos"
+              else
+                echo "RECUPERACIÓN EXITOSA: Latencia normal"
+              fi

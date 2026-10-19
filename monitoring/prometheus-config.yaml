@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: otel-lab
+data:
+  prometheus.yaml: |
+    global:
+      scrape_interval:     15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster:     otel-lab-chaos
+        environment: production
+
+    rule_files:
+      - /etc/prometheus/rules/*.yaml
+
+    scrape_configs:
+      # OTel Collector — métricas de los microservicios
+      - job_name: otel-collector
+        static_configs:
+          - targets: ["otel-collector-svc:8889"]
+
+      # Métricas internas del Collector
+      - job_name: otel-collector-internal
+        static_configs:
+          - targets: ["otel-collector-svc:8888"]
+
+      # Scraping de pods con anotaciones prometheus.io/scrape
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [otel-lab]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}
+
+      # LitmusChaos metrics
+      - job_name: litmus-chaos-operator
+        static_configs:
+          - targets: ["chaos-operator-metrics.litmus:8080"]
+
+      # Chaos Mesh metrics
+      - job_name: chaos-mesh-controller
+        static_configs:
+          - targets: ["chaos-controller-manager-metrics.chaos-mesh:10080"]
+
+  rules.yaml: |
+    groups:
+      - name: aiops.anomaly_detection
+        interval: 30s
+        rules:
+          - record: job:error_rate:baseline_1h
+            expr: |
+              avg_over_time(
+                (rate(otelcol_http_requests_total{status=~"5.."}[5m])
+                 / rate(otelcol_http_requests_total[5m]))[1h:5m]
+              )
+
+          - record: job:latency_p99:current
+            expr: |
+              histogram_quantile(0.99,
+                rate(otelcol_http_request_duration_seconds_bucket[5m])
+              )
+
+          - alert: AIOpsCorrelatedAnomaly
+            expr: |
+              (
+                rate(otelcol_http_requests_total{status=~"5.."}[5m])
+                / rate(otelcol_http_requests_total[5m])
+              ) > (job:error_rate:baseline_1h * 3)
+              AND
+              job:latency_p99:current > 0.25
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Anomalía correlacionada — Chaos experiment activo"
+              description: "Error rate y latencia p99 anómalos simultáneamente"
+
+          - alert: ChaosLatencyDetected
+            expr: |
+              histogram_quantile(0.99,
+                rate(otelcol_http_request_duration_seconds_bucket{job="service-b"}[2m])
+              ) > 0.25
+            for: 30s
+            labels:
+              severity: warning
+              experiment: chaos-mesh-network-latency
+            annotations:
+              summary: "Latencia anómala en service-b — Chaos Mesh activo"
+
+          - alert: HighBurnRate_PAGE
+            expr: |
+              (
+                rate(otelcol_http_requests_total{status=~"5.."}[1h])
+                / rate(otelcol_http_requests_total[1h])
+              ) / 0.005 > 14.4
+            for: 0m
+            labels:
+              severity: critical
+              page: "true"
+            annotations:
+              summary: "Burn rate crítico — error budget agotándose"

@@ -1,0 +1,12 @@
+Listar todos los namespaces:bashkubectl get ns
+ Crear un nuevo namespace:bashkubectl create ns <nombre-namespace>
+ Ver detalles de un namespace específico:bashkubectl describe ns <nombre-namespace>
+ Cambiar tu namespace por defecto permanentemente: (Evita tener que escribir -n <nombre> en cada comando)bashkubectl config set-context --current --namespace=<nombre-namespace>
+ Eliminar un namespace: (¡Cuidado! Borra todo lo que esté adentro)bashkubectl delete ns <nombre-namespace>
+ 🌐 Comandos para Load Balancers (Services)En Kubernetes, un Load Balancer es un tipo de Service (svc) que expone tu aplicación a internet.Listar todos los servicios del namespace actual:bashkubectl get svc
+ Listar servicios en un namespace específico:bashkubectl get svc -n <nombre-namespace>
+ Listar servicios en TODOS los namespaces:bashkubectl get svc -A
+ Ver la IP pública asignada al Load Balancer:bashkubectl get svc <nombre-del-servicio> -w
+ (El parámetro -w significa "watch". Te permite ver en tiempo real cuándo la EXTERNAL-IP cambia de <pending> a una IP real).Ver detalles, puertos y tráfico del Load Balancer:bashkubectl describe svc <nombre-del-servicio>
+ Eliminar un Load Balancer:bashkubectl delete svc <nombre-del-servicio>
+ 

@@ -1,0 +1,24 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-service-a
+  namespace: otel-lab
+  annotations:
+    experiment.chaos/type: "resource-exhaustion"
+    experiment.chaos/target: "service-a"
+    experiment.chaos/objective: "Evaluar autoscaling HPA y degradacion de CPU"
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "service-a"
+  stressors:
+    cpu:
+      workers: 2
+      load: 75
+    memory:
+      workers: 1
+      size: "128MB"
+  duration: "3m"

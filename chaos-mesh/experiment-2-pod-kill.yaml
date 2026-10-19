@@ -1,0 +1,17 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-kill-service-b
+  namespace: otel-lab
+  annotations:
+    experiment.chaos/type: "pod-kill"
+    experiment.chaos/target: "service-b"
+    experiment.chaos/objective: "Evaluar alta disponibilidad N-1 y conmutacion transparente de endpoints"
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - otel-lab
+    labelSelectors:
+      "app": "service-b"

@@ -1,0 +1,5 @@
+project_id   = "bold-bastion-505423-e7"
+region       = "us-central1"
+cluster_name = "otel-lab"
+node_count   = 1
+machine_type = "e2-standard-4"
