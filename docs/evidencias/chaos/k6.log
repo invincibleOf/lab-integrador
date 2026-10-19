@@ -1,0 +1,36 @@
+time="2026-10-18T21:53:50-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": dial: i/o timeout"
+time="2026-10-18T21:53:50-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": dial: i/o timeout"
+time="2026-10-18T21:53:51-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-001\": dial: i/o timeout"
+time="2026-10-18T21:53:51-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-002\": dial: i/o timeout"
+time="2026-10-18T21:53:53-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": dial: i/o timeout"
+time="2026-10-18T21:53:57-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-002\": dial: i/o timeout"
+time="2026-10-18T21:54:17-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-002\": request timeout"
+time="2026-10-18T21:54:18-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-001\": request timeout"
+time="2026-10-18T21:54:19-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": request timeout"
+time="2026-10-18T21:54:22-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": request timeout"
+time="2026-10-18T21:54:24-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-001\": request timeout"
+time="2026-10-18T21:54:25-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-003\": request timeout"
+time="2026-10-18T21:54:26-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-001\": request timeout"
+time="2026-10-18T21:54:27-05:00" level=warning msg="Request Failed" error="Get \"http://35.192.251.247:8000/order/ord-002\": request timeout"
+
+
+  █ TOTAL RESULTS 
+
+    HTTP
+    http_req_duration..............: avg=1.09s    min=0s       med=323.81ms max=1m0s  p(90)=2.3s  p(95)=2.35s
+      { expected_response:true }...: avg=946.35ms min=246.99ms med=321.73ms max=5.43s p(90)=2.29s p(95)=2.34s
+    http_req_failed................: 3.86%  139 out of 3600
+    http_reqs......................: 3600   1.999965/s
+
+    EXECUTION
+    iteration_duration.............: avg=1.27s    min=328.17ms med=454.58ms max=1m0s  p(90)=2.43s p(95)=2.55s
+    iterations.....................: 3600   1.999965/s
+    vus............................: 0      min=0           max=19
+    vus_max........................: 20     min=20          max=20
+
+    NETWORK
+    data_received..................: 1.8 MB 1.0 kB/s
+    data_sent......................: 316 kB 176 B/s
+
+
+

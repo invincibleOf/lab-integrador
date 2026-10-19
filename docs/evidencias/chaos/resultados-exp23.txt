@@ -1,0 +1,23 @@
+[02:57:40] Warm-up de baseline: 90s con carga constante
+[02:59:10] ══ EXPERIMENTO 2 — error rate 10% en data-service
+[02:59:11] p99 antes: service-a=425ms service-b=237ms
+[02:59:12] fault inyectado (T0)
+[03:00:23] ALERTA FIRING: ErrorRateAnomaly2Sigma|service-b  →  MTTD = 72s (CUMPLE objetivo ≤ 120s)
+[03:00:24] Alerta enriquecida → trace_id: 36a4d151b1fbb811a87e1820dee797c3
+[03:01:42] p99 durante: service-a=280ms service-b=223ms
+[03:01:42] requests 5xx en el borde durante el experimento: 22
+[03:01:42] error budget consumido (SLO 99.5%/30d = 25,920 req): 0.087%
+[03:01:49] fault revertido; esperando recuperación 60s
+[03:02:50] p99 después: service-a=463ms service-b=239ms
+[03:02:50] ══ EXPERIMENTO 3 — Combinado (correlación errores + latencia)
+[03:02:50] p99 antes: service-a=463ms service-b=239ms
+[03:02:53] fault inyectado (T0)
+[03:07:52] SIN ALERTA dentro de 300s
+[03:07:53] p99 durante: service-a=2485ms service-b=2485ms
+[03:07:53] requests 5xx en el borde durante el experimento: 64
+[03:07:53] error budget consumido (SLO 99.5%/30d = 25,920 req): 0.245%
+[03:07:59] fault revertido; esperando recuperación 60s
+[03:09:00] p99 después: service-a=4387ms service-b=3837ms
+[03:09:00] ══ RUIDO: episodios de alerta durante toda la corrida
+[03:09:00] Estáticas  (9): {'Static_LatencyP99_200ms': 2, 'Static_AnyError': 7}
+[03:09:00] Dinámicas/AIOps (9): {'LatencySLOBreach': 4, 'ErrorRateAnomaly2Sigma': 4, 'AIOpsCorrelatedAnomaly': 1}

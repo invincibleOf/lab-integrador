@@ -1,0 +1,6 @@
+[02:46:40] Warm-up de baseline: 90s con carga constante
+[02:48:10] ══ EXPERIMENTO 1 — NetworkChaos 200ms en service-b
+[02:48:11] p99 antes: service-a=4696ms service-b=850ms
+[02:48:20] fault inyectado (T0)
+[02:48:21] ALERTA FIRING: LatencySLOBreach|service-b  →  MTTD = 10s (CUMPLE objetivo ≤ 120s)
+[02:48:23] Alerta enriquecida → trace_id: 5d73096ab0534404d2e9f8847c0558bd

@@ -13,7 +13,7 @@ data:
         environment: production
 
     rule_files:
-      - /etc/prometheus/rules/*.yaml
+      - /etc/prometheus/rules.yaml
 
     scrape_configs:
       # OTel Collector — métricas de los microservicios
@@ -54,58 +54,74 @@ data:
 
   rules.yaml: |
     groups:
-      - name: aiops.anomaly_detection
-        interval: 30s
+      - name: sli.recording
+        interval: 15s
         rules:
-          - record: job:error_rate:baseline_1h
+          # SLI de errores por servicio (semconv HTTP estable)
+          - record: svc:error_ratio:rate1m
             expr: |
-              avg_over_time(
-                (rate(otelcol_http_requests_total{status=~"5.."}[5m])
-                 / rate(otelcol_http_requests_total[5m]))[1h:5m]
-              )
+              sum by (exported_job) (rate(otelcol_http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[1m]))
+              / sum by (exported_job) (rate(otelcol_http_server_request_duration_seconds_count[1m]))
+          # SLI de latencia p99 por servicio
+          - record: svc:latency_p99:1m
+            expr: |
+              histogram_quantile(0.99, sum by (exported_job, le) (rate(otelcol_http_server_request_duration_seconds_bucket[1m])))
+          # Baseline dinámico: media y desviación estándar de los últimos 30m
+          - record: svc:error_ratio:baseline_avg30m
+            expr: avg_over_time(svc:error_ratio:rate1m[30m])
+          - record: svc:error_ratio:baseline_stddev30m
+            expr: stddev_over_time(svc:error_ratio:rate1m[30m])
 
-          - record: job:latency_p99:current
+      - name: aiops.anomaly_detection
+        interval: 15s
+        rules:
+          # AIOps — umbral DINÁMICO: error_rate > baseline + 2σ
+          # (piso de 1% para no alertar por ruido cuando el baseline es ~0)
+          - alert: ErrorRateAnomaly2Sigma
             expr: |
-              histogram_quantile(0.99,
-                rate(otelcol_http_request_duration_seconds_bucket[5m])
-              )
-
-          - alert: AIOpsCorrelatedAnomaly
-            expr: |
-              (
-                rate(otelcol_http_requests_total{status=~"5.."}[5m])
-                / rate(otelcol_http_requests_total[5m])
-              ) > (job:error_rate:baseline_1h * 3)
-              AND
-              job:latency_p99:current > 0.25
-            for: 1m
+              svc:error_ratio:rate1m
+                > (svc:error_ratio:baseline_avg30m + 2 * svc:error_ratio:baseline_stddev30m)
+              and svc:error_ratio:rate1m > 0.01
+            for: 30s
             labels:
               severity: critical
             annotations:
-              summary: "Anomalía correlacionada — Chaos experiment activo"
-              description: "Error rate y latencia p99 anómalos simultáneamente"
+              summary: "Error rate anómalo (>baseline+2σ) en {{ $labels.exported_job }}"
+              description: "error_ratio={{ $value | humanizePercentage }}"
+              runbook: "Buscar trazas con error=true en Jaeger para {{ $labels.exported_job }}"
 
-          - alert: ChaosLatencyDetected
-            expr: |
-              histogram_quantile(0.99,
-                rate(otelcol_http_request_duration_seconds_bucket{job="service-b"}[2m])
-              ) > 0.25
+          # SLO de latencia: p99 < 500ms (baseline medido ~400ms con db-f1-micro)
+          - alert: LatencySLOBreach
+            expr: svc:latency_p99:1m > 0.5
             for: 30s
             labels:
               severity: warning
-              experiment: chaos-mesh-network-latency
             annotations:
-              summary: "Latencia anómala en service-b — Chaos Mesh activo"
+              summary: "p99 > 500ms en {{ $labels.exported_job }}"
+              description: "p99={{ $value }}s"
 
-          - alert: HighBurnRate_PAGE
+          # Regla de CORRELACIÓN del enunciado:
+          # error_rate > baseline + 2σ  Y  latency_p99 > SLO_threshold
+          - alert: AIOpsCorrelatedAnomaly
             expr: |
-              (
-                rate(otelcol_http_requests_total{status=~"5.."}[1h])
-                / rate(otelcol_http_requests_total[1h])
-              ) / 0.005 > 14.4
-            for: 0m
+              (svc:error_ratio:rate1m
+                > (svc:error_ratio:baseline_avg30m + 2 * svc:error_ratio:baseline_stddev30m)
+               and svc:error_ratio:rate1m > 0.01)
+              and on (exported_job) svc:latency_p99:1m > 0.5
+            for: 30s
             labels:
               severity: critical
               page: "true"
             annotations:
-              summary: "Burn rate crítico — error budget agotándose"
+              summary: "Anomalía correlacionada (errores + latencia) en {{ $labels.exported_job }}"
+
+      - name: static.baseline_comparison
+        interval: 15s
+        rules:
+          # Umbrales ESTÁTICOS clásicos — solo para comparar ruido vs. AIOps
+          - alert: Static_AnyError
+            expr: svc:error_ratio:rate1m > 0
+            labels: {severity: info, kind: static}
+          - alert: Static_LatencyP99_200ms
+            expr: svc:latency_p99:1m > 0.2
+            labels: {severity: info, kind: static}

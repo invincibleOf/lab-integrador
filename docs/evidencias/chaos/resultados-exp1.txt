@@ -1,0 +1,7 @@
+[02:51:04] Warm-up de baseline: 90s con carga constante
+[02:52:34] ══ EXPERIMENTO 1 — NetworkChaos 200ms en service-b
+[02:52:34] p99 antes: service-a=442ms service-b=239ms
+[02:52:36] fault inyectado (T0)
+[02:53:36] ALERTA FIRING: LatencySLOBreach|service-b  →  MTTD = 61s (CUMPLE objetivo ≤ 120s)
+[02:53:36] Alerta enriquecida → trace_id: c1b28a5607b64f330a546789bf8bc764  (traza lenta >500ms de service-a durante el fault)
+[02:57:35] fault revertido (corrida interrumpida al caerse el port-forward a Jaeger; NetworkChaos eliminado manualmente)
